@@ -14,8 +14,6 @@ import scala.util.{Success, Failure}
 
 object Runner extends App {
 
-
-
   implicit val system = ActorSystem("MyActorSystem")
 
   implicit val ec = system.dispatcher
@@ -31,7 +29,7 @@ object Runner extends App {
   val done: Future[Done] =
     Source(1 to 10000)
       .map(_.toString)
-      .map(value => new ProducerRecord[String, String]("test", value))
+      .map(value => new ProducerRecord[String, String]("test", s"{ message_id: $value }"))
       .runWith( Producer.plainSink(producerSettings))
 
   done.onComplete {
