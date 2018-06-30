@@ -1,2 +1,2 @@
 # kafkasimpleservice
-simple kafka streaming app
+simple streaming app using kafka
