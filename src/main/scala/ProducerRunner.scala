@@ -12,7 +12,7 @@ import org.apache.kafka.common.serialization.StringSerializer
 import scala.concurrent.Future
 import scala.util.{Success, Failure}
 
-object Runner extends App {
+object ProducerRunner extends App {
 
   implicit val system = ActorSystem("MyActorSystem")
 
