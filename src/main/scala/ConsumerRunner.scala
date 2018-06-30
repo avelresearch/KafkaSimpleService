@@ -7,7 +7,7 @@ import akka.actor.ActorSystem
 import akka.kafka.{ConsumerSettings, ProducerSettings, Subscriptions}
 import akka.kafka.scaladsl.{Consumer, Producer}
 import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Sink, Source}
+import akka.stream.scaladsl.{Keep, Sink, Source}
 import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.TopicPartition
@@ -36,21 +36,35 @@ object ConsumerRunner extends App {
   // Offset Storage external to Kafka
   val db = new OffsetStore
 
-  val control = db.loadOffset()
-    .map { fromOffset =>
+//  val control =
+//    Consumer
+//      .atMostOnceSource(consumerSettings, Subscriptions.topics("test"))
+//      .mapAsync(1)(record => business(record.key, record.value()))
+//      .to(Sink.foreach(it => println(s"Done with $it")))
+//      .run()
+//  // #atMostOnce
+//
+//  def business(key: String, value: Array[Byte]): Future[Done] = {
+//    val recordAsStr = new String(value, "UTF-8")
+//    println(s"Record: $key $recordAsStr")
+//    Future.successful(Done)
+//  }
 
+  //terminateWhenDone(control.shutdown())
+
+  val consumerControl = db.loadOffset()
+    .map { fromOffset =>
       Consumer
       .plainSource(
         consumerSettings,
-        Subscriptions.assignmentWithOffset(
-          new TopicPartition("test", /* partition = */ 0) -> fromOffset
-        )
+        Subscriptions.assignmentWithOffset(new TopicPartition("test", /* partition = */ 0) -> fromOffset)
       )
       .mapAsync(1)(db.businessLogicAndStoreOffset)
-      .to(Sink.ignore)
+      .toMat(Sink.ignore)(Keep.both)
       .run()
 
   }
+
   //control.foreach(c => terminateWhenDone(c.shutdown()))
 
 
