@@ -23,7 +23,7 @@ object ProducerRunner extends App {
   val producerSettings = ProducerSettings(config, new StringSerializer, new StringSerializer)
       .withBootstrapServers(bootstrapServers)
 
-  val source = Source[String]( (1 to 10).map(x => s"some message: $x" ) )
+  val source = Source[String]( (51 to 55).map(x => s"some message: $x" ) )
 
   val count: Flow[String, Int, NotUsed] = Flow[String].map(_ ⇒ 1)
 
@@ -34,23 +34,19 @@ object ProducerRunner extends App {
 
   val kafkaSink = Producer.plainSink(producerSettings)
 
-  val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit b =>
-    import akka.stream.scaladsl.GraphDSL.Implicits._
+//  val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit b =>
+//    import akka.stream.scaladsl.GraphDSL.Implicits._
+//
+//    val bcast = b.add(Broadcast[String](2, true))
+//    source ~> bcast.in
+//
+//    bcast.out(0) ~> count  ~> countString
+//    bcast.out(1) ~> mapFromConsumerRecord  ~> kafkaSink
+//
+//    ClosedShape
+//  })
 
-    val bcast = b.add(Broadcast[String](2))
-    source ~> bcast.in
-
-    bcast.out(0) ~> count  ~> countString
-    bcast.out(1) ~> mapFromConsumerRecord  ~> kafkaSink
-
-    ClosedShape
-  })
-
-
-
-
-  val res = g.run()
-
+//  val res = g.run()
 
   val done: Future[Done] =
        source

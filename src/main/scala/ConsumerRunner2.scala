@@ -1,21 +1,18 @@
-import java.nio.file.Paths
-
-import ProducerRunner.{done, system}
 import akka.{Done, NotUsed}
-import akka.actor.{Actor, ActorLogging, ActorSystem, Props, Status}
+import akka.actor.ActorSystem
+import akka.actor.FSM.Failure
+import akka.actor.Status.Success
 import akka.kafka.ConsumerMessage.CommittableMessage
-import akka.kafka.scaladsl.Consumer.DrainingControl
 import akka.kafka._
-import akka.kafka.scaladsl.{Consumer, Producer}
+import akka.kafka.scaladsl.Consumer
+import akka.kafka.scaladsl.Consumer.DrainingControl
 import akka.stream.{ActorMaterializer, ClosedShape}
-import akka.stream.scaladsl.{Broadcast, FileIO, Flow, GraphDSL, Keep, RunnableGraph, Sink, Source}
+import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, RunnableGraph, Sink}
 import akka.util.ByteString
-import com.avelresearch.runners.ConsumerRunner.{consumerSettings, subscription, system}
-import org.apache.kafka.clients.consumer.{ConsumerConfig, ConsumerRecord}
-import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer, StringSerializer}
+import org.apache.kafka.clients.consumer.ConsumerConfig
+import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer}
 
 import scala.concurrent.Future
-import scala.util.{Failure, Success}
 
 object ConsumerRunner2 extends App {
 
@@ -24,7 +21,6 @@ object ConsumerRunner2 extends App {
   implicit val materializer = ActorMaterializer()
 
   val bootstrapServers = "localhost:9092"
-
   val config = system.settings.config.getConfig("akka.kafka.consumer")
 
   val consumerSettings =
@@ -35,44 +31,73 @@ object ConsumerRunner2 extends App {
       .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
       .withProperty(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG, "5000")
 
-
-  val firstOne: Flow[ CommittableMessage[String,Array[Byte] ], Int, NotUsed] = Flow[CommittableMessage[String,Array[Byte] ]].take(1).map{
-    msg =>
-      {
-        println(msg.record.offset())
+  val firstOne: Flow[CommittableMessage[String, Array[Byte]], Int, NotUsed] =
+    Flow[CommittableMessage[String, Array[Byte]]]
+      .take(1)
+      .map(msg => {
+        val m = ByteString(msg.record.value())
+        //println(s"${m.map(_.toChar).mkString("")}")
+        println(s"Offset: ${msg.record.offset()} ")
         1
-      }
-  }
+      })
 
-//  val countFlow : Flow[ Int, Int, NotUsed] = Flow[ Int ].fold(0)((a,b) => a + b)
-//
-//  val countString: Sink[Int, Future[Int] ] = Sink.fold[Int, Int](0)( (a,b) =>  a + b )
+  val transformToStringFlow: Flow[CommittableMessage[String, Array[Byte]], ByteString, NotUsed] =
+    Flow[CommittableMessage[String, Array[Byte]]]
+      .map(msg => {
+        val m = ByteString(msg.record.value())
+        println(s"${m.map(_.toChar).mkString("")}")
+        m
+      })
 
-  val transformToStringFlow: Flow[ CommittableMessage[String, Array[Byte] ], ByteString, NotUsed] =
-    Flow[ CommittableMessage[String, Array[Byte] ] ].map(msg => {
-      val m = ByteString( msg.record.value() )
-      println( s"${m.map(_.toChar).mkString("")}" )
-      m
-    } )
+  //  val source = Consumer
+  //    .committableSource(consumerSettings, Subscriptions.topics("test"))
+  //
+  //  val res : Future[Int] = source
+  //    .take(1)
+  //    .via(firstOne)
+  //    .runFold(0)(_ + _)
+  //
+  //  res.map(r => {
+  //    println(r)
+  //  })
+  //
+  //  val control =
+  //    Consumer
+  //      .committableSource(consumerSettings, Subscriptions.topics("test"))
+  //      .mapAsync(10) { msg =>
+  //        business(msg.record.key, msg.record.value).map(_ => msg.committableOffset)
+  //      }
+  //      .mapAsync(5)(offset => offset.commitScaladsl())
+  //      .toMat(Sink.ignore)(Keep.both)
+  //      .mapMaterializedValue(DrainingControl.apply)
+  //      .run()
+  //
+  //
+  //  def business(key: String, value: Array[Byte]): Future[Done] = Future{
+  //    val m = ByteString(value)
+  //    println(s"${m.map(_.toChar).mkString("")}")
+  //    Done
+  //  }
+
 
   val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit b =>
     import akka.stream.scaladsl.GraphDSL.Implicits._
 
-    val bcast = b.add(Broadcast[ CommittableMessage[String,Array[Byte] ] ](2))
+    val bcast = b.add(Broadcast[CommittableMessage[String, Array[Byte]]](2, eagerCancel = false))
 
     val source = Consumer
       .committableSource(consumerSettings, Subscriptions.topics("test"))
 
+    val out = Sink.ignore
+
     source ~> bcast.in
 
-    bcast.out(0) ~> firstOne  ~> Sink.ignore
+    bcast.out(0) ~> firstOne ~> out
 
-    bcast.out(1) ~> transformToStringFlow ~> Flow[_].mapAsync(1) ~> Sink.ignore
-
+    bcast.out(1) ~> transformToStringFlow ~> out
 
     ClosedShape
   })
 
   g.run()
-
 }
