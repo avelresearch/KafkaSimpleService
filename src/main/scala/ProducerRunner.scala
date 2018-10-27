@@ -1,5 +1,3 @@
-package com.avelresearch.runners
-
 import akka.{Done, NotUsed}
 import akka.actor.ActorSystem
 import akka.kafka.ProducerSettings
@@ -18,12 +16,14 @@ object ProducerRunner extends App {
   implicit val ec = system.dispatcher
   implicit val materializer = ActorMaterializer()
 
+  val bootstrapServers = "localhost:9092"
+
   val config = system.settings.config.getConfig("akka.kafka.producer")
 
   val producerSettings = ProducerSettings(config, new StringSerializer, new StringSerializer)
-      .withBootstrapServers("192.168.0.8:9092")
+      .withBootstrapServers(bootstrapServers)
 
-  val source = Source[String]( (1 to 50000).map(_.toString())  )
+  val source = Source[String]( (1 to 10).map(x => s"some message: $x" ) )
 
   val count: Flow[String, Int, NotUsed] = Flow[String].map(_ ⇒ 1)
 
@@ -45,20 +45,27 @@ object ProducerRunner extends App {
 
     ClosedShape
   })
+
+
+
+
   val res = g.run()
 
 
-//  val done: Future[Done] =
-//       source
-//         .map(_.toString)
-//      .map(value => new ProducerRecord[String, String]("test", s"{ message_id: $value }"))
-//      .runWith( Producer.plainSink(producerSettings))
-//
-//
-//  done.onComplete {
-//      case Failure(e) => system.terminate()
-//      case Success(_) => system.terminate()
-//    }
+  val done: Future[Done] =
+       source
+         .map(s => {
+           println(s)
+           s.toString
+         })
+      .map(value => new ProducerRecord[String, String]("test", s"{ message_id: $value }"))
+      .runWith( Producer.plainSink(producerSettings))
+
+
+  done.onComplete {
+      case Failure(e) => system.terminate()
+      case Success(_) => system.terminate()
+    }
 
 }
 

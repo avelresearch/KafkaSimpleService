@@ -26,15 +26,16 @@ import scala.util.{Failure, Success}
 object ConsumerRunner extends App {
 
   implicit val system = ActorSystem("MyActorSystem")
-
   implicit val ec = system.dispatcher
-
   implicit val materializer = ActorMaterializer()
 
+  val bootstrapServers = "localhost:9092"
+
   val config = system.settings.config.getConfig("akka.kafka.consumer")
+
   val consumerSettings =
     ConsumerSettings(config, new StringDeserializer, new ByteArrayDeserializer)
-      .withBootstrapServers("192.168.0.8:9092")
+      .withBootstrapServers(bootstrapServers)
       .withGroupId("group1")
       //.withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
       .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
@@ -123,6 +124,7 @@ object ConsumerRunner extends App {
     import akka.stream.scaladsl.GraphDSL.Implicits._
 
     val bcast = b.add(Broadcast[ CommittableMessage[String,Array[Byte] ] ](2))
+
     Consumer.committableSource(consumerSettings, subscription) ~> bcast.in
 
     bcast.out(0) ~> count  ~> countFlow ~> Flow[Int].map(s => ByteString(s.toByte) ) ~> FileIO.toPath( Paths.get("/Users/pavel/Sources/count.txt") )
@@ -133,6 +135,7 @@ object ConsumerRunner extends App {
   })
 
   val res = g.run()
+
 
   def business(key: String, value: Array[Byte]): Future[Done] = Future {
     println(s"key: $key value: ${value.map(_.toChar).mkString("")}")
