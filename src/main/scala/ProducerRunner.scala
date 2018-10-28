@@ -23,7 +23,7 @@ object ProducerRunner extends App {
   val producerSettings = ProducerSettings(config, new StringSerializer, new StringSerializer)
       .withBootstrapServers(bootstrapServers)
 
-  val source = Source[String]( (51 to 55).map(x => s"some message: $x" ) )
+  val source = Source[String]( (100 to 200).map(x => s"some message: $x" ) )
 
   val count: Flow[String, Int, NotUsed] = Flow[String].map(_ ⇒ 1)
 
