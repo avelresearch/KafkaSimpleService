@@ -1,19 +1,15 @@
-import akka.{Done, NotUsed}
-import akka.actor.ActorSystem
-import akka.actor.FSM.Failure
-import akka.actor.Status.Success
-import akka.kafka.ConsumerMessage.CommittableMessage
+import ConsumerRunner2.RebalanceListener.{ExtractLastCommittedOffsets}
+import akka.Done
+import akka.actor.{Actor, ActorLogging, ActorSystem, Props}
 import akka.kafka._
 import akka.kafka.scaladsl.Consumer
 import akka.kafka.scaladsl.Consumer.DrainingControl
-import akka.stream.{ActorMaterializer, ClosedShape}
-import akka.stream.scaladsl.{Broadcast, Flow, GraphDSL, Keep, RunnableGraph, Sink}
-import akka.util.ByteString
+import akka.stream.ActorMaterializer
+import akka.stream.scaladsl.{Keep, Sink}
 import org.apache.kafka.clients.consumer.ConsumerConfig
-import org.apache.kafka.common.{PartitionInfo, TopicPartition}
+import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer}
 
-import scala.concurrent.Future
 
 object ConsumerRunner2 extends App {
 
@@ -21,46 +17,16 @@ object ConsumerRunner2 extends App {
   implicit val ec = system.dispatcher
   implicit val materializer = ActorMaterializer()
 
-  val bootstrapServers = "localhost:9092"
+  val bootstrapServers = "10.81.19.213:9092"
   val config = system.settings.config.getConfig("akka.kafka.consumer")
 
   val consumerSettings =
     ConsumerSettings(config, new StringDeserializer, new ByteArrayDeserializer)
       .withBootstrapServers(bootstrapServers)
-      .withGroupId("group1")
+      .withGroupId("event-tokeniser-aadab")
       //.withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
       .withProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true")
       .withProperty(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG, "5000")
-
-  val firstOne: Flow[CommittableMessage[String, Array[Byte]], Int, NotUsed] =
-    Flow[CommittableMessage[String, Array[Byte]]]
-      .take(1)
-      .map(msg => {
-        val m = ByteString(msg.record.value())
-        //println(s"${m.map(_.toChar).mkString("")}")
-        println(s"Offset: ${msg.record.offset()} ")
-        1
-      })
-
-  val transformToStringFlow: Flow[CommittableMessage[String, Array[Byte]], ByteString, NotUsed] =
-    Flow[CommittableMessage[String, Array[Byte]]]
-      .map(msg => {
-        val m = ByteString(msg.record.value())
-        println(s"${m.map(_.toChar).mkString("")}")
-        m
-      })
-//
-//    val source = Consumer
-//      .committableSource(consumerSettings, Subscriptions.topics("test"))
-
-//    val res : Future[Int] = source
-//      .take(1)
-//      .via(firstOne)
-//      .runFold(0)(_ + _)
-//
-//    res.map(r => {
-//      println(r)
-//    })
 
   import akka.actor.ActorRef
   import akka.kafka.KafkaConsumerActor
@@ -71,71 +37,145 @@ object ConsumerRunner2 extends App {
   import scala.concurrent.Future
   import scala.concurrent.duration._
 
+
+  val topicName = "raw"
+
+
   implicit val timeout = Timeout(5.seconds)
 
   val consumer: ActorRef = system.actorOf(KafkaConsumerActor.props(consumerSettings))
 
-  // ... create source ...
+
+//  val topicsFuture: Future[Metadata.Topics] = (consumer ? Metadata.ListTopics).mapTo[Metadata.Topics]
+//
+//  topicsFuture.map(_.response.foreach { map =>
+//    map.foreach {
+//      case (topic, partitionInfo) => if (topic.equals("raw"))
+//        partitionInfo.foreach { info =>
+//          println(s"$topic: $info")
+//        }
+//    }
+//  })
+
+  object RebalanceListener {
+    case class ExtractLastCommittedOffsets(partition: Set[TopicPartition])
+  }
+
+  class RebalanceListener(client : ActorRef) extends Actor with ActorLogging {
+    def receive: Receive = {
+      case TopicPartitionsAssigned(sub, assigned) ⇒ {
+        println("Extract Partition offsets")
+
+        log.info("Assigned: {}", assigned)
+
+          assigned.foreach(assigned => {
+            val partition = assigned.partition()
+
+            val topicPartition = new TopicPartition(topicName, partition)
+
+            val offset: Future[Metadata.CommittedOffset] = ( client ? Metadata.GetCommittedOffset( topicPartition ) ).mapTo[Metadata.CommittedOffset]
+            offset.map(meta => {
+              meta.response.foreach(response => {
+                println( s"Response: ${response.offset()} ")
+              })
+            })
+
+          })
+
+      }
+        //self ! ExtractLastCommittedOffsets(assigned)
+
+      case TopicPartitionsRevoked(sub, revoked) ⇒
+        log.info("Revoked: {}", revoked)
+
+    }
+  }
+
+  val rebalanceListener = system.actorOf(Props( new RebalanceListener(consumer)) )
+
+  val subscription = Subscriptions
+    .topics(Set(topicName))
+    // additionally, pass the actor reference:
+    .withRebalanceListener(rebalanceListener)
 
 
-  val topicPartition = new TopicPartition("test", 0)
-  val offset: Future[Metadata.CommittedOffset] = ( consumer ? Metadata.GetCommittedOffset( topicPartition ) ).mapTo[Metadata.CommittedOffset]
-  offset.map(meta => {
-    meta.response.foreach(response => {
-      println( s"Response: ${response.offset()} ")
+  val control =
+    Consumer
+      .committableSource(consumerSettings, subscription)
+      .mapAsync(10) { msg =>
+        business(msg.record.key, msg.record.value).map(_ => msg.committableOffset)
+      }
+      .mapAsync(5)(offset => offset.commitScaladsl())
+      .toMat(Sink.ignore)(Keep.both)
+      .mapMaterializedValue(DrainingControl.apply)
+      .run()
+
+  def business(key: String, value: Array[Byte]): Future[Done] = Future {
+    println(s"Key: $key - Value: ${value.map(_.toChar).mkString("")}")
+    Done
+  }
+
+
+//    val partitionsList = new ListBuffer[Int]()
+//
+//    val clientConsumer = consumerSettings.createKafkaConsumer()
+//    clientConsumer.subscribe( util.Arrays.asList(topicName) )
+//
+//    val record = clientConsumer.poll(10)
+//
+//    val p = clientConsumer.assignment()
+//
+//    println("Assigned partitions")
+//
+//    println( p.toArray.mkString("\n") )
+//    println("End")
+//    clientConsumer.close()
+
+
+  //val partitions: Future[Metadata.PartitionsFor] = ( consumer ? Metadata.GetPartitionsFor( topicName ) ).mapTo[Metadata.PartitionsFor]
+
+  /*
+  partitions.map(meta => {
+    meta.response.foreach(res => {
+      println("Response")
+
+      res.foreach(item => {
+        partitionsList.append(item.partition())
+        println( s"Partition: ${item.partition()} ")
+      })
+
+
+
+      partitionsList.foreach(partition => {
+
+        val topicPartition = new TopicPartition("raw", partition)
+
+        val offset: Future[Metadata.CommittedOffset] = ( consumer ? Metadata.GetCommittedOffset( topicPartition ) ).mapTo[Metadata.CommittedOffset]
+
+        offset.map(meta => {
+          meta.response.foreach(res => {
+            println( s"Partition: ${partition} - Offset: ${res.offset()} ")
+          })
+        })
+
+      })
+
+
+
+
+//      partitions.map(p => {
+//        p.response.foreach(response => {
+//          response.foreach(p => {
+//            println(s"Assigned: ${p.partition()}")
+//          })
+//        })
+//      })
+
+      println( p.toArray.mkString("\n") )
+      println("End")
+      clientConsumer.close()
     })
   })
+  */
 
-  //  val topicsFuture: Future[Metadata.PartitionsFor] = (consumer ? Metadata.GetPartitionsFor("test") ).mapTo[Metadata.PartitionsFor]
-//  topicsFuture.map(metaData => {
-//    metaData.response.foreach(response => {
-//      response.foreach(p => {
-//
-//        println(s"Partition: ${p.partition()} - ${p.topic()}")
-//
-//
-//      })
-//      //println(s"Result: ${r}")
-//    })
-//  })
-
-//    val control =
-//      Consumer
-//        .committableSource(consumerSettings, Subscriptions.topics("test"))
-//        .mapAsync(10) { msg =>
-//          business(msg.record.key, msg.record.value).map(_ => msg.committableOffset)
-//        }
-//        .mapAsync(5)(offset => offset.commitScaladsl())
-//        .toMat(Sink.ignore)(Keep.both)
-//        .mapMaterializedValue(DrainingControl.apply)
-//        .run()
-
-
-    def business(key: String, value: Array[Byte]): Future[Done] = Future{
-      val m = ByteString(value)
-      println(s"${m.map(_.toChar).mkString("")}")
-      Done
-    }
-
-
-//  val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit b =>
-//    import akka.stream.scaladsl.GraphDSL.Implicits._
-//
-//    val bcast = b.add(Broadcast[CommittableMessage[String, Array[Byte]]](2, eagerCancel = false))
-//
-//    val source = Consumer
-//      .committableSource(consumerSettings, Subscriptions.topics("test"))
-//
-//    val out = Sink.ignore
-//
-//    source ~> bcast.in
-//
-//    bcast.out(0) ~> firstOne ~> out
-//
-//    bcast.out(1) ~> transformToStringFlow ~> out
-//
-//    ClosedShape
-//  })
-//
-//  g.run()
 }
